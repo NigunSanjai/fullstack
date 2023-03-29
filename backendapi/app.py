@@ -1,78 +1,74 @@
+import csv
+
+import pymongo
 from flask import Flask, request, jsonify, session
 from flask_restful import Api, Resource
 from models import UserModel, db
 from flask_cors import CORS, cross_origin
+from flask_pymongo import PyMongo
+from pymongo import MongoClient
+from bson.json_util import dumps
+from bson.objectid import ObjectId
 
 app = Flask(__name__)
 CORS(app)
 
-app.config['SQLALCHEMY_DATABASE_URI'] = 'sqlite:///data.db'
-app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
 
-api = Api(app)
-db.init_app(app)
+client = MongoClient('mongodb://localhost:27017/')
+db = client['mydatabase']
+collection = db['users']
 
-@app.before_first_request
-def create_table():
-    db.create_all()
+@app.route('/register', methods=['POST'])
+def create_user():
+    data = request.get_json()
+    new_user = {
+        'name': data['name'],
+        'email': data['email'],
+        'password': data['password'],
+        'contact': data['contact']
+    }
+    result = collection.insert_one(new_user)
+    inserted_user = collection.find_one({'_id': ObjectId(result.inserted_id)})
+    inserted_user['_id'] = str(inserted_user['_id'])
+    return jsonify(inserted_user), 201
 
-class UserView(Resource):
-    def get(self):
-        users = UserModel.query.all()
-        return {'Users': list(x.json() for x in users)}
-
-    def post(self):
-        data = request.get_json()
-        new_user = UserModel(data['name'], data['email'], data['password'], data['contact'])
-        db.session.add(new_user)
-        db.session.commit()
-        return new_user.json(), 201
-
-class SingleUserView(Resource):
-    def get(self, id):
-        user = UserModel.query.filter_by(id=id).first()
-        if user:
-            return user.json()
-        return {'message': "User not found"}, 404
-
-    def delete(self, id):
-        user = UserModel.query.filter_by(id=id).first()
-        if user:
-            db.session.delete(user)
-            db.session.commit()
-            return {'message': 'Deleted'}
-        else:
-            return {'message': "User not found"}, 404
-
-    def put(self, id):
-        data = request.get_json()
-        user = UserModel.query.filter_by(id=id).first()
-        if user:
-            user.name = data['name']
-            user.email = data['email']
-            user.password = data['password']
-            user.contact = data['contact']
-        else:
-            user = UserModel(id=id, **data)
-        db.session.add(user)
-        db.session.commit()
-
-        return user.json()
-
-class LoginView(Resource):
-    def post(self):
-        if request.is_json:
-            data = request.get_json()
-            user = UserModel.query.filter_by(email=data['email']).first()
-            if user and user.password == data['password']:
-                return {'result': True}, 200
-        return {'result': False}, 401
+@app.route('/login', methods=['POST'])
+def login():
+    data = request.get_json()
+    user = collection.find_one({'email': data['email'], 'password': data['password']})
+    if user:
+        user['_id'] = str(user['_id'])
+        return jsonify({'result': True,'user_id': str(user['_id'])})
+    else:
+        return jsonify({'result': False})
 
 
-api.add_resource(UserView, '/users')
-api.add_resource(SingleUserView ,'/user/<int:id>')
-api.add_resource(LoginView,'/login')
+@app.route('/upload', methods=['POST'])
+def upload():
+    # Get the data from the request
+    current_user = request.form.get('currentuser')
+    column_value = request.form.get('column_value')
+    time_period = request.form.get('time_period')
+    number_value = request.form.get('number_value')
+    file = request.files['file']
 
+    # Convert the file data to CSV format
+    file_data = file.read().decode('utf-8').splitlines()
+    csv_reader = csv.reader(file_data)
+    csv_data = []
+    for row in csv_reader:
+        csv_data.append(row)
+    db.users.update_one(
+    {"_id": ObjectId(current_user)},
+    {"$set": {
+            'current_user': current_user,
+            'column_value': column_value,
+            'time_period': time_period,
+            'number_value': number_value,
+            'file_data': csv_data
+        }}
+        )
+    return jsonify({'response': True}), 200
 app.debug=True
 
 if __name__=='__main__':
